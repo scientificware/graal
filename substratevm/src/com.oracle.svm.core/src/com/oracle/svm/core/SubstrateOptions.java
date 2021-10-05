@@ -346,7 +346,30 @@ public class SubstrateOptions {
     public static final HostedOptionKey<Integer> MaxNodesInTrivialLeafMethod = new HostedOptionKey<>(40);
 
     @Option(help = "Saves stack base pointer on the stack on method entry.")//
-    public static final HostedOptionKey<Boolean> PreserveFramePointer = new HostedOptionKey<>(false);
+    public static final HostedOptionKey<Boolean> PreserveFramePointer = new HostedOptionKey<Boolean>(false) {
+        @Override
+        public Boolean getValueOrDefault(UnmodifiableEconomicMap<OptionKey<?>, Object> values) {
+            if (SubstrateUtil.getArchitectureName().equals("aarch64") && (OS.WINDOWS.isCurrent() || OS.DARWIN.isCurrent())) {
+                /*
+                 * While running on AArch64 Windows or Darwin, PreserveFramePointer must be set. For
+                 * more information, see:
+                 *
+                 * @formatter:off
+                 * https://developer.apple.com/documentation/xcode/writing-arm64-code-for-apple-platforms
+                 * https://docs.microsoft.com/en-us/cpp/build/arm64-windows-abi-conventions
+                 * @formatter:on
+                 */
+                return true;
+            }
+            return super.getValueOrDefault(values);
+        }
+
+        @Override
+        public Boolean getValue(OptionValues values) {
+            assert checkDescriptorExists();
+            return getValueOrDefault(values.getMap());
+        }
+    };
 
     @Option(help = "Use callee saved registers to reduce spilling for low-frequency calls to stubs (if callee saved registers are supported by the architecture)")//
     public static final HostedOptionKey<Boolean> UseCalleeSavedRegisters = new HostedOptionKey<>(true);
