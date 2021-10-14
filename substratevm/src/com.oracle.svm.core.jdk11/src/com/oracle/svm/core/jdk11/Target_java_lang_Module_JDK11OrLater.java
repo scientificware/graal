@@ -37,6 +37,7 @@ import com.oracle.svm.core.jdk.resources.ResourceStorageEntry;
 import java.io.ByteArrayInputStream;
 import java.io.InputStream;
 import java.util.Arrays;
+import java.util.Map;
 import java.util.Objects;
 
 @SuppressWarnings("unused")
@@ -96,6 +97,10 @@ public final class Target_java_lang_Module_JDK11OrLater {
 
     @TargetClass(className = "java.lang.Module", innerClass = "ReflectionData", onlyWith = JDK11OrLater.class) //
     private static final class Target_java_lang_Module_ReflectionData {
+        @Alias @RecomputeFieldValue(kind = RecomputeFieldValue.Kind.NewInstance, declClassName = "java.lang.WeakPairMap") //
+        static Target_java_lang_WeakPairMap<Module, Module, Boolean> reads;
+        @Alias @RecomputeFieldValue(kind = RecomputeFieldValue.Kind.NewInstance, declClassName = "java.lang.WeakPairMap") //
+        static Target_java_lang_WeakPairMap<Module, Module, Map<String, Boolean>> exports;
         @Alias @RecomputeFieldValue(kind = RecomputeFieldValue.Kind.NewInstance, declClassName = "java.lang.WeakPairMap") //
         static Target_java_lang_WeakPairMap<Module, Class<?>, Boolean> uses;
     }
