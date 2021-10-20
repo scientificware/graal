@@ -418,7 +418,6 @@ suite = {
             "dependencies": [
                 "com.oracle.objectfile",
                 "com.oracle.svm.core",
-                "com.oracle.graal.pointsto",
                 "com.oracle.graal.reachability"
             ],
             "requiresConcealed": {
