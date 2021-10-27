@@ -24,7 +24,24 @@
  */
 package com.oracle.svm.core.jdk;
 
-import static com.oracle.svm.core.snippets.KnownIntrinsics.readCallerStackPointer;
+import com.oracle.svm.core.SubstrateUtil;
+import com.oracle.svm.core.annotate.Alias;
+import com.oracle.svm.core.annotate.Delete;
+import com.oracle.svm.core.annotate.InjectAccessors;
+import com.oracle.svm.core.annotate.NeverInline;
+import com.oracle.svm.core.annotate.RecomputeFieldValue;
+import com.oracle.svm.core.annotate.Substitute;
+import com.oracle.svm.core.annotate.TargetClass;
+import com.oracle.svm.core.annotate.TargetElement;
+import com.oracle.svm.core.graal.snippets.CEntryPointSnippets;
+import com.oracle.svm.core.thread.Target_java_lang_Thread;
+import com.oracle.svm.core.util.VMError;
+import jdk.vm.ci.meta.MetaAccessProvider;
+import jdk.vm.ci.meta.ResolvedJavaField;
+import org.graalvm.compiler.serviceprovider.JavaVersionUtil;
+import org.graalvm.nativeimage.Platform;
+import org.graalvm.nativeimage.Platforms;
+import org.graalvm.word.Pointer;
 
 import java.net.URL;
 import java.security.AccessControlContext;
@@ -43,24 +60,7 @@ import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Predicate;
 
-import jdk.vm.ci.meta.MetaAccessProvider;
-import jdk.vm.ci.meta.ResolvedJavaField;
-import org.graalvm.compiler.serviceprovider.JavaVersionUtil;
-import org.graalvm.nativeimage.Platform;
-import org.graalvm.nativeimage.Platforms;
-import org.graalvm.word.Pointer;
-
-import com.oracle.svm.core.SubstrateUtil;
-import com.oracle.svm.core.annotate.Alias;
-import com.oracle.svm.core.annotate.Delete;
-import com.oracle.svm.core.annotate.InjectAccessors;
-import com.oracle.svm.core.annotate.NeverInline;
-import com.oracle.svm.core.annotate.RecomputeFieldValue;
-import com.oracle.svm.core.annotate.Substitute;
-import com.oracle.svm.core.annotate.TargetClass;
-import com.oracle.svm.core.annotate.TargetElement;
-import com.oracle.svm.core.thread.Target_java_lang_Thread;
-import com.oracle.svm.core.util.VMError;
+import static com.oracle.svm.core.snippets.KnownIntrinsics.readCallerStackPointer;
 
 // Checkstyle: stop
 import sun.security.jca.ProviderList;
@@ -108,7 +108,19 @@ final class Target_java_security_AccessController {
     }
 
     @Substitute
+    @SuppressWarnings("deprecation")
     static AccessControlContext getStackAccessControlContext() {
+        if (!CEntryPointSnippets.isIsolateInitialized()) {
+            /*
+             * If isolate still isn't initialized, we can assume that we are so early in the JDK
+             * initialization that any attempt at stalk walk will fail as not even the basic
+             * PrintWriter/Logging is available yet. This manifested when
+             * UseDedicatedVMOperationThread hosted option was set, triggering a runtime crash.
+             */
+            Permissions perms = new Permissions();
+            perms.add(SecurityConstants.ALL_PERMISSION);
+            return new AccessControlContext(new ProtectionDomain[]{new ProtectionDomain(null, perms)});
+        }
         return StackAccessControlContextVisitor.getFromStack();
     }
 
@@ -118,47 +130,47 @@ final class Target_java_security_AccessController {
     }
 
     @Substitute
-    @TargetElement(onlyWith = JDK14OrLater.class)
+    @TargetElement(onlyWith = JDK17OrLater.class)
     private static ProtectionDomain getProtectionDomain(final Class<?> caller) {
         return caller.getProtectionDomain();
     }
 
     @Substitute
-    @TargetElement(onlyWith = JDK14OrLater.class)
+    @TargetElement(onlyWith = JDK17OrLater.class)
     static <T> T executePrivileged(PrivilegedExceptionAction<T> action, AccessControlContext context, Class<?> caller) throws Throwable {
         if (action == null) {
             throw new NullPointerException("Null action");
         }
 
-        AccessControllerUtil.PrivilegedStack.push(context, caller);
+        PrivilegedStack.push(context, caller);
         try {
             return action.run();
         } catch (Exception e) {
             throw AccessControllerUtil.wrapCheckedException(e);
         } finally {
-            AccessControllerUtil.PrivilegedStack.pop();
+            PrivilegedStack.pop();
         }
     }
 
     @Substitute
-    @TargetElement(onlyWith = JDK14OrLater.class)
+    @TargetElement(onlyWith = JDK17OrLater.class)
     static <T> T executePrivileged(PrivilegedAction<T> action, AccessControlContext context, Class<?> caller) throws Throwable {
         if (action == null) {
             throw new NullPointerException("Null action");
         }
 
-        AccessControllerUtil.PrivilegedStack.push(context, caller);
+        PrivilegedStack.push(context, caller);
         try {
             return action.run();
         } catch (Exception e) {
             throw AccessControllerUtil.wrapCheckedException(e);
         } finally {
-            AccessControllerUtil.PrivilegedStack.pop();
+            PrivilegedStack.pop();
         }
     }
 
     @Substitute
-    @TargetElement(onlyWith = JDK14OrLater.class)
+    @TargetElement(onlyWith = JDK17OrLater.class)
     @SuppressWarnings({"unused", "deprecation"})
     static AccessControlContext checkContext(AccessControlContext context, Class<?> caller) {
 
@@ -182,8 +194,8 @@ final class Target_java_security_AccessController {
 @TargetClass(java.security.AccessControlContext.class)
 @SuppressWarnings({"unused"})
 final class Target_java_security_AccessControlContext {
-    @Alias protected boolean isPrivileged;
-    @Alias protected boolean isAuthorized;
+    @Alias public boolean isPrivileged;
+    @Alias public boolean isAuthorized;
 
     @Alias
     Target_java_security_AccessControlContext(ProtectionDomain[] context, AccessControlContext privilegedContext) {
@@ -191,6 +203,10 @@ final class Target_java_security_AccessControlContext {
 
     @Substitute
     static Debug getDebug() {
+        /*
+         * We want to prevent Debug class from being reachable, as this method would return null
+         * anyways
+         */
         return null;
     }
 }

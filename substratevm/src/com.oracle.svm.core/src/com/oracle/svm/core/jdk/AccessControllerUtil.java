@@ -35,10 +35,83 @@ import java.security.ProtectionDomain;
 import java.util.ArrayDeque;
 import java.util.Objects;
 
+/**
+ * Stack for storing AccessControlContexts. Used in conjunction with
+ * {@code StackAccessControlContextVisitor}.
+ */
+class PrivilegedStack {
+
+    public static class StackElement {
+        protected AccessControlContext context;
+        protected Class<?> caller;
+
+        StackElement(AccessControlContext context, Class<?> caller) {
+            this.context = context;
+            this.caller = caller;
+        }
+
+        public AccessControlContext getContext() {
+            return context;
+        }
+
+        public Class<?> getCaller() {
+            return caller;
+        }
+    }
+
+    /* Local AccessControlContext stack */
+    private static final FastThreadLocalObject<ArrayDeque<StackElement>> stack;
+
+    static {
+
+        @SuppressWarnings("unchecked")
+        Class<ArrayDeque<StackElement>> cls = (Class<ArrayDeque<StackElement>>) (Object) ArrayDeque.class;
+        stack = FastThreadLocalFactory.createObject(cls, "AccessControlContextStack");
+    }
+
+    @SuppressWarnings("unchecked")
+    private static ArrayDeque<StackElement> getStack() {
+        ensureInitialized();
+        return stack.get();
+    }
+
+    private static void ensureInitialized() {
+        if (stack.get() == null) {
+            ArrayDeque<StackElement> tmp = new ArrayDeque<>();
+            stack.set(tmp);
+        }
+    }
+
+    public static void push(AccessControlContext context, Class<?> caller) {
+        getStack().push(new StackElement(context, caller));
+    }
+
+    public static void pop() {
+        getStack().pop();
+    }
+
+    public static AccessControlContext peekContext() {
+        return Objects.requireNonNull(getStack().peek()).getContext();
+    }
+
+    public static Class<?> peekCaller() {
+        return Objects.requireNonNull(getStack().peek()).getCaller();
+    }
+
+    public static int length() {
+        return getStack().size();
+    }
+}
+
 @InternalVMMethod
 @SuppressWarnings({"unused"})
 public class AccessControllerUtil {
 
+    /**
+     * Instance that is used to mark contexts that were disallowed in
+     * {@code AccessControlContextReplacerFeature.replaceAccessControlContext()} If this marker is
+     * passed to {@code AccessController.doPrivileged()} a runtime error will be thrown.
+     */
     public static final AccessControlContext DISALLOWED_CONTEXT_MARKER;
 
     static {
@@ -46,59 +119,6 @@ public class AccessControllerUtil {
             DISALLOWED_CONTEXT_MARKER = ReflectionUtil.lookupConstructor(AccessControlContext.class, ProtectionDomain[].class, boolean.class).newInstance(new ProtectionDomain[0], true);
         } catch (ReflectiveOperationException ex) {
             throw VMError.shouldNotReachHere(ex);
-        }
-    }
-
-    public static class PrivilegedStack {
-
-        public static class StackElement {
-            protected AccessControlContext context;
-            protected Class<?> caller;
-
-            StackElement(AccessControlContext context, Class<?> caller) {
-                this.context = context;
-                this.caller = caller;
-            }
-
-            public AccessControlContext getContext() {
-                return context;
-            }
-
-            public Class<?> getCaller() {
-                return caller;
-            }
-        }
-
-        @SuppressWarnings("rawtypes") private static final FastThreadLocalObject<ArrayDeque> stack = FastThreadLocalFactory.createObject(ArrayDeque.class, "AccessControlContextStack");
-
-        @SuppressWarnings("unchecked")
-        private static ArrayDeque<StackElement> getStack() {
-            ArrayDeque<StackElement> tmp = stack.get();
-            if (tmp == null) {
-                tmp = new ArrayDeque<>();
-                stack.set(tmp);
-            }
-            return tmp;
-        }
-
-        public static void push(AccessControlContext context, Class<?> caller) {
-            getStack().push(new StackElement(context, caller));
-        }
-
-        public static void pop() {
-            getStack().pop();
-        }
-
-        public static AccessControlContext peekContext() {
-            return Objects.requireNonNull(getStack().peek()).getContext();
-        }
-
-        public static Class<?> peekCaller() {
-            return Objects.requireNonNull(getStack().peek()).getCaller();
-        }
-
-        public static int length() {
-            return getStack().size();
         }
     }
 

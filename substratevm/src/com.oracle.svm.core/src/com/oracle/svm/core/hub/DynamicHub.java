@@ -55,14 +55,16 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.StringJoiner;
 
+import com.oracle.svm.core.BaseProcessPropertiesSupport;
 import org.graalvm.compiler.core.common.NumUtil;
 import org.graalvm.compiler.core.common.SuppressFBWarnings;
 import org.graalvm.compiler.serviceprovider.JavaVersionUtil;
-import org.graalvm.nativeimage.ImageInfo;
+import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 import org.graalvm.nativeimage.ProcessProperties;
 import org.graalvm.nativeimage.c.function.CFunctionPointer;
+import org.graalvm.nativeimage.impl.ProcessPropertiesSupport;
 import org.graalvm.util.DirectAnnotationAccess;
 
 import com.oracle.svm.core.RuntimeAssertionsSupport;
@@ -327,7 +329,6 @@ public final class DynamicHub implements JavaKind.FormatWithToString, AnnotatedE
         this.module = module;
     }
 
-    static final boolean IS_EXECUTABLE = ImageInfo.isExecutable();
     /**
      * Final fields in substituted classes are treated as implicitly RecomputeFieldValue even when
      * not annotated with @RecomputeFieldValue. Their name must not match a field in the original
@@ -336,21 +337,19 @@ public final class DynamicHub implements JavaKind.FormatWithToString, AnnotatedE
     static final LazyFinalReference<java.security.ProtectionDomain> allPermDomainReference = new LazyFinalReference<>(() -> {
         java.security.Permissions perms = new java.security.Permissions();
         perms.add(SecurityConstants.ALL_PERMISSION);
-        URL url = null;
+        CodeSource cs = null;
 
-        if (IS_EXECUTABLE) {
+        if (ImageSingletons.lookup(ProcessPropertiesSupport.class) instanceof BaseProcessPropertiesSupport) {
             // Try to use executable image's name as code source for the class.
             // The file location can be used by Java code to determine its location on disk, similar
             // to argv[0].
             try {
-                url = new File(ProcessProperties.getExecutableName()).toURI().toURL();
+                cs = new CodeSource(new File(ProcessProperties.getExecutableName()).toURI().toURL(), (Certificate[]) null);
             } catch (MalformedURLException e) {
                 // This should not really happen; the file is cannonicalized, absolute, so it should
                 // always have file:// URL.
             }
         }
-
-        CodeSource cs = new CodeSource(url, (Certificate[]) null);
         return new java.security.ProtectionDomain(cs, perms);
     });
 

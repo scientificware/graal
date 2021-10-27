@@ -32,6 +32,9 @@ import org.graalvm.compiler.serviceprovider.JavaVersionUtil;
 import org.graalvm.nativeimage.hosted.Feature;
 
 import java.security.AccessControlContext;
+import java.security.DomainCombiner;
+import java.security.Permission;
+import java.security.ProtectionDomain;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -61,26 +64,34 @@ class AccessControlContextReplacerFeature implements Feature {
 
     @Override
     public void duringSetup(DuringSetupAccess access) {
-        // Following AccessControlContexts are allowed in the image heap since they cannot leak
-        // sensitive information.
-        // They mostly originate from JDK's static final fields, and they do not feature
-        // CodeSources, DomainCombiners etc.
-        // New JDK versions can feature new or remove old contexts, so this method should be kept
-        // up-to-date.
+        /*
+         * Following AccessControlContexts are allowed in the image heap since they cannot leak
+         * sensitive information. They originate from JDK's static final fields, and they do not
+         * feature CodeSources, DomainCombiners etc.
+         *
+         * New JDK versions will remove old contexts (since AccessControlContext is marked as
+         * deprecated since JDK 17), so this method should be kept up-to-date. When a listed context
+         * is removed from JDK, an error message will be thrown from
+         * AccessControlContextReplacerFeature.allowContextIfExists, so maintaining this list should
+         * not be difficult (just adding upper bound for JAVA_SPEC in if statements below).
+         *
+         * In addition to these contexts, only the very simple contexts are permitted in the image
+         * heap (see isSimpleContext method).
+         */
         allowContextIfExists("java.util.Calendar$CalendarAccessControlContext", "INSTANCE");
         allowContextIfExists("javax.management.monitor.Monitor", "noPermissionsACC");
 
-        if (JavaVersionUtil.JAVA_SPEC < 9) {
+        if (JavaVersionUtil.JAVA_SPEC <= 8) {
             allowContextIfExists("sun.misc.InnocuousThread", "ACC");
         }
-        if (JavaVersionUtil.JAVA_SPEC >= 9) {
+        if (JavaVersionUtil.JAVA_SPEC >= 11) {
             allowContextIfExists("java.security.AccessController$AccHolder", "innocuousAcc");
             allowContextIfExists("java.util.concurrent.ForkJoinPool$DefaultForkJoinWorkerThreadFactory", "ACC");
         }
         if (JavaVersionUtil.JAVA_SPEC < 17) {
             allowContextIfExists("java.util.concurrent.ForkJoinWorkerThread", "INNOCUOUS_ACC");
         }
-        if (JavaVersionUtil.JAVA_SPEC >= 9 && JavaVersionUtil.JAVA_SPEC < 17) {
+        if (JavaVersionUtil.JAVA_SPEC >= 11 && JavaVersionUtil.JAVA_SPEC < 17) {
             allowContextIfExists("java.util.concurrent.ForkJoinPool$InnocuousForkJoinWorkerThreadFactory", "ACC");
         }
         if (JavaVersionUtil.JAVA_SPEC >= 17) {
@@ -90,9 +101,67 @@ class AccessControlContextReplacerFeature implements Feature {
         access.registerObjectReplacer(AccessControlContextReplacerFeature::replaceAccessControlContext);
     }
 
+    private static boolean isSimpleContext(AccessControlContext ctx) {
+        /*
+         * In addition to aforementioned allow-listed contexts we also allow inclusion of very
+         * strict subset of contexts that couldn't possibly leak sensitive information in the image
+         * heap. This set of rules is overly strict on purpose as we want to be on a safe side.
+         *
+         * Issues could arise only in cases where end-users manually marked classes that rely on
+         * doPrivileged invocation in static initializers for initialization at build time. At that
+         * point they will be presented with an error message from
+         * Target_java_security_AccessController.checkContext that will inform them about potential
+         * fixes.
+         */
+        ProtectionDomain[] context = ReflectionUtil.readField(AccessControlContext.class, "context", ctx);
+        AccessControlContext privilegedContext = ReflectionUtil.readField(AccessControlContext.class, "privilegedContext", ctx);
+        DomainCombiner combiner = ReflectionUtil.readField(AccessControlContext.class, "combiner", ctx);
+        Permission[] permissions = ReflectionUtil.readField(AccessControlContext.class, "permissions", ctx);
+        AccessControlContext parent = ReflectionUtil.readField(AccessControlContext.class, "parent", ctx);
+        ProtectionDomain[] limitedContext = ReflectionUtil.readField(AccessControlContext.class, "limitedContext", ctx);
+
+        if (context != null && context.length > 0) {
+            return checkPD(context);
+        }
+        if (combiner != null) {
+            return false;
+        }
+        if (parent != null) {
+            return isSimpleContext(parent);
+        }
+        if (limitedContext != null && limitedContext.length > 0) {
+            return checkPD(limitedContext);
+        }
+        if (privilegedContext != null) {
+            return isSimpleContext(privilegedContext);
+        }
+        return true;
+    }
+
+    private static boolean checkPD(ProtectionDomain[] list) {
+        for (ProtectionDomain pd : list) {
+            if (pd.getCodeSource() != null) {
+                return false;
+            }
+            if (pd.getPrincipals().length > 0) {
+                return false;
+            }
+            if (pd.getPermissions() != null) {
+                return false;
+                /*
+                 * Technically we could allow certain permissions but this could be fragile.
+                 * Contexts from user code should be reinitialized at runtime anyways.
+                 */
+            }
+        }
+        return true;
+    }
+
     private static Object replaceAccessControlContext(Object obj) {
         if (obj instanceof AccessControlContext && obj != AccessControllerUtil.DISALLOWED_CONTEXT_MARKER) {
             if (allowedContexts.containsValue(obj)) {
+                return obj;
+            } else if (isSimpleContext((AccessControlContext) obj)) {
                 return obj;
             } else {
                 return AccessControllerUtil.DISALLOWED_CONTEXT_MARKER;
