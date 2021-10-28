@@ -112,7 +112,6 @@ import org.graalvm.compiler.replacements.SnippetTemplate;
 import org.graalvm.compiler.replacements.nodes.MacroInvokable;
 import org.graalvm.compiler.virtual.phases.ea.PartialEscapePhase;
 import org.graalvm.compiler.virtual.phases.ea.ReadEliminationPhase;
-import org.graalvm.nativeimage.ImageSingletons;
 
 import com.oracle.graal.pointsto.infrastructure.GraphProvider.Purpose;
 import com.oracle.graal.pointsto.meta.AnalysisMethod;
@@ -144,7 +143,6 @@ import com.oracle.svm.core.graal.phases.DeadStoreRemovalPhase;
 import com.oracle.svm.core.graal.phases.OptimizeExceptionPathsPhase;
 import com.oracle.svm.core.graal.snippets.DeoptTester;
 import com.oracle.svm.core.graal.stackvalue.StackValueNode;
-import com.oracle.svm.core.heap.RestrictHeapAccessCallees;
 import com.oracle.svm.core.util.InterruptImageBuilding;
 import com.oracle.svm.core.util.VMError;
 import com.oracle.svm.hosted.FeatureHandler;
@@ -672,23 +670,6 @@ public class CompileQueue {
         return false;
     }
 
-    private static boolean mustNotAllocateCallee(HostedMethod method) {
-        return ImageSingletons.lookup(RestrictHeapAccessCallees.class).mustNotAllocate(method);
-    }
-
-    private static boolean mustNotAllocate(HostedMethod method) {
-        /*
-         * GR-15580: This check is suspicious. The no-allocation restriction is propagated through
-         * the call graph, so checking explicitly for annotated methods means that either not enough
-         * methods are excluded from inlining, or the inlining restriction is not necessary at all.
-         * We should elevate all methods that really need an inlining restriction
-         * to @Uninterruptible or mark them as @NeverInline, so that no-allocation does not need any
-         * more inlining restrictions and this code can be removed.
-         */
-        RestrictHeapAccess annotation = method.getAnnotation(RestrictHeapAccess.class);
-        return annotation != null && annotation.access() == RestrictHeapAccess.Access.NO_ALLOCATION && !annotation.mayBeInlined();
-    }
-
     public static boolean callerAnnotatedWith(Invoke invoke, Class<? extends Annotation> annotationClass) {
         return getCallerAnnotation(invoke, annotationClass) != null;
     }
@@ -1081,9 +1062,6 @@ public class CompileQueue {
         }
 
         if (!Uninterruptible.Utils.inliningAllowed(caller, callee)) {
-            return false;
-        }
-        if (!mustNotAllocateCallee(caller) && mustNotAllocate(callee)) {
             return false;
         }
         if (!callee.canBeInlined()) {
