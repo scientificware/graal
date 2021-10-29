@@ -1178,6 +1178,24 @@ def clinittest(args):
 class SubstrateJvmFuncsFallbacksBuilder(mx.Project):
     def __init__(self, suite, name, deps, workingSets, theLicense, **kwArgs):
         mx.Project.__init__(self, suite, name, None, [], deps, workingSets, suite.dir, theLicense, **kwArgs)
+        libjvm = mx.dependency('substratevm:com.oracle.svm.native.jvm.' + ('windows' if mx.is_windows() else 'posix'))
+        native_project_dir = join(libjvm.dir, 'src')
+        try:
+            # Remove any deprecated leftover src_gen subdirs in native_project_dir
+            native_project_src_gen_dir = join(native_project_dir, 'src_gen')
+            if exists(native_project_src_gen_dir):
+                mx.rmtree(native_project_src_gen_dir)
+        except OSError:
+            pass
+
+        # Ensure generated JvmFuncsFallbacks.c will be part of the generated libjvm
+        jvm_fallbacks_dir = join(self.get_output_root(), 'src_gen')
+        rel_jvm_fallbacks_dir = relpath(jvm_fallbacks_dir, libjvm.dir)
+        libjvm.srcDirs.append(rel_jvm_fallbacks_dir)
+
+        # Define src and dest paths used by JvmFuncsFallbacksBuildTask
+        self.jvm_funcs_path = join(native_project_dir, 'JvmFuncs.c')
+        self.jvm_fallbacks_path = join(jvm_fallbacks_dir, 'JvmFuncsFallbacks.c')
 
     def getBuildTask(self, args):
         return JvmFuncsFallbacksBuildTask(self, args, 1)
@@ -1185,27 +1203,6 @@ class SubstrateJvmFuncsFallbacksBuilder(mx.Project):
 class JvmFuncsFallbacksBuildTask(mx.BuildTask):
     def __init__(self, subject, args, parallelism):
         super(JvmFuncsFallbacksBuildTask, self).__init__(subject, args, parallelism)
-
-        libjvm = mx.dependency('substratevm:com.oracle.svm.native.jvm.' + ('windows' if mx.is_windows() else 'posix'))
-        self.native_project_dir = join(libjvm.dir, 'src')
-        self.jvm_funcs_path = join(self.native_project_dir, 'JvmFuncs.c')
-        try:
-            # Remove any remaining leftover src_gen subdirs in native_project_dir
-            native_project_src_gen_dir = join(self.native_project_dir, 'src_gen')
-            if exists(native_project_src_gen_dir):
-                mx.rmtree(native_project_src_gen_dir)
-        except OSError:
-            pass
-
-        jvm_fallbacks_dir = join(self.subject.get_output_root(), 'src_gen')
-        self.jvm_fallbacks_path = join(jvm_fallbacks_dir, 'JvmFuncsFallbacks.c')
-
-        # Ensure generated JvmFuncsFallbacks.c will be part of the generated libjvm
-        rel_jvm_fallbacks_dir = relpath(jvm_fallbacks_dir, libjvm.dir)
-        src_dirs = list(libjvm.srcDirs)
-        if rel_jvm_fallbacks_dir not in src_dirs:
-            src_dirs.append(rel_jvm_fallbacks_dir)
-            libjvm.srcDirs = src_dirs
 
         if svm_java8():
             staticlib_path = ['jre', 'lib']
@@ -1223,7 +1220,7 @@ class JvmFuncsFallbacksBuildTask(mx.BuildTask):
         self.staticlibs = glob(staticlib_wildcard_path)
 
     def newestOutput(self):
-        return mx.TimeStampFile(self.jvm_fallbacks_path)
+        return mx.TimeStampFile(self.subject.jvm_fallbacks_path)
 
     def needsBuild(self, newestInput):
         sup = super(JvmFuncsFallbacksBuildTask, self).needsBuild(newestInput)
@@ -1238,7 +1235,7 @@ class JvmFuncsFallbacksBuildTask(mx.BuildTask):
             mx.abort('Please use a JDK that contains static JDK libraries.\n'
                      + 'See: https://github.com/oracle/graal/tree/master/substratevm#quick-start')
 
-        infile = mx.TimeStampFile.newest([self.jvm_funcs_path] + self.staticlibs)
+        infile = mx.TimeStampFile.newest([self.subject.jvm_funcs_path] + self.staticlibs)
         needs_build = infile.isNewerThan(outfile)
         return needs_build, infile.path + ' is newer than ' + outfile.path
 
@@ -1311,7 +1308,7 @@ class JvmFuncsFallbacksBuildTask(mx.BuildTask):
                         mx.logv('Skipping line: ' + line.rstrip())
                 return collector
 
-            with open(self.jvm_funcs_path) as f:
+            with open(self.subject.jvm_funcs_path) as f:
                 collector = collect_impls_fn('JVM_')
                 for line in f:
                     collector(line)
@@ -1376,10 +1373,10 @@ JNIEXPORT void JNICALL {0}() {{
                     new_fallback.close()
 
         required_fallbacks = collect_missing_symbols() - collect_implementations()
-        write_fallbacks(sorted(required_fallbacks), self.jvm_fallbacks_path)
+        write_fallbacks(sorted(required_fallbacks), self.subject.jvm_fallbacks_path)
 
     def clean(self, forBuild=False):
-        gen_src_dir = dirname(self.jvm_fallbacks_path)
+        gen_src_dir = dirname(self.subject.jvm_fallbacks_path)
         if exists(gen_src_dir):
             remove_tree(gen_src_dir)
 
